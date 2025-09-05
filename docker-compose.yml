@@ -1,0 +1,133 @@
+# Facebook Marketplace Agent - Professional Edition
+# Docker Compose configuration for complete deployment
+
+version: '3.8'
+
+services:
+  # Main application
+  facebook-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: facebook-marketplace-agent
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HEADLESS=true
+      - LOG_LEVEL=INFO
+      - ENABLE_MONITORING=true
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/config
+      - agent_screenshots:/app/screenshots
+    networks:
+      - agent_network
+    depends_on:
+      - prometheus
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import app.core.facebook_marketplace_agent; print('OK')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Reverse proxy
+  nginx:
+    image: nginx:alpine
+    container_name: facebook-agent-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    networks:
+      - agent_network
+    depends_on:
+      - facebook-agent
+
+  # Monitoring with Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: facebook-agent-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - agent_network
+
+  # Visualization with Grafana
+  grafana:
+    image: grafana/grafana:latest
+    container_name: facebook-agent-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - agent_network
+    depends_on:
+      - prometheus
+
+  # Development service
+  facebook-agent-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: facebook-marketplace-agent-dev
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HEADLESS=false
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - .:/app
+      - agent_screenshots:/app/screenshots
+    networks:
+      - agent_network
+    ports:
+      - "8001:8000"
+    profiles:
+      - development
+
+# Named volumes
+volumes:
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  agent_screenshots:
+    driver: local
+
+# Networks
+networks:
+  agent_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# Additional configurations for different environments
+# Override with docker-compose.override.yml for local development
